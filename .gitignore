@@ -1,0 +1,14 @@
+.env
+.env.local
+follow_users.log
+github_follow.log
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+venv/
+.venv/
+*.log
+check_api_call.ipynb
+old/scraper_usernames/.env
+old/fething_new_users.ipynb
