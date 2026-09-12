@@ -1,22 +1,32 @@
 """Persist bot progress in state.json."""
 
+from __future__ import annotations
+
 import json
-import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from bot.config import load_settings
 
 DEFAULT_STATE = {
     "last_followed_user": None,
     "how_many_bot_followed_so_far_counter": 0,
     "last_fetched_user": 0,
+    "discovery": {
+        "channel_idx": 0,
+        "user_query_idx": 0,
+        "user_page": 1,
+        "repo_query_idx": 0,
+        "repo_page": 1,
+        "code_query_idx": 0,
+        "code_page": 1,
+        "repo_queue": [],
+        "seen_repos": [],
+    },
 }
 
 
 def _state_path() -> Path:
-    return Path(os.getenv("STATE_FILE", "state.json").strip() or "state.json")
+    return load_settings().state_file
 
 
 def load_state() -> dict:
@@ -35,5 +45,6 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     path = _state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as file:
         json.dump(state, file, indent=4)
