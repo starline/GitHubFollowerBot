@@ -1,0 +1,35 @@
+---
+description: Run all shell/git/gh commands via WSL, not Windows PowerShell
+alwaysApply: true
+---
+
+# WSL shell (not PowerShell)
+
+This repo lives under WSL Debian: `/home/starl/GitHubFollowerBot`.
+Cursor's default Shell may be Windows PowerShell — **do not** run project tooling there.
+
+## Required
+
+- Prefix every shell command with WSL:
+  `wsl -e bash -lc '...'`
+- Put the real work inside the quoted bash string. Use absolute Linux paths.
+- For `gh`, `git`, `python`, `pip`, `npm`, and similar: only via WSL.
+- Working directory inside WSL: `cd /home/starl/GitHubFollowerBot` (or set it in the bash `-lc` string).
+
+## Examples
+
+```bash
+# ✅ GOOD
+wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && gh --version'
+wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && git status'
+wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && python -m bot'
+
+# ❌ BAD — gh/git often missing or wrong env in PowerShell
+gh pr create ...
+git status
+```
+
+## Notes
+
+- `gh` is installed in WSL at `~/.local/bin/gh` (ensure PATH in non-interactive bash if needed: `export PATH="$HOME/.local/bin:$PATH"`).
+- Do not install or rely on Windows `gh` for this project unless the user asks.

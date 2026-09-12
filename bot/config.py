@@ -260,7 +260,7 @@ def load_settings(*, interactive: bool = False) -> Settings:
         location_exclude=_csv_lower("LOCATION_EXCLUDE"),
         login_exclude=_csv_lower("LOGIN_EXCLUDE"),
         skip_dead=_env_bool("FILTER_SKIP_DEAD", True),
-        max_inactive_days=max(1, _int("MAX_INACTIVE_DAYS", 365)),
+        max_inactive_days=max(1, _int("MAX_INACTIVE_DAYS", 30)),
         require_public_events=_env_bool("FILTER_REQUIRE_PUBLIC_EVENTS", True),
         skip_empty_profiles=_env_bool("FILTER_SKIP_EMPTY_PROFILES", True),
     )

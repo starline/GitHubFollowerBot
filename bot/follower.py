@@ -107,19 +107,25 @@ def follow_users(settings: Settings, users: list[str]) -> None:
 
 
 def run_cycle(settings: Settings) -> None:
+    # 1) Search / fetch candidates by criteria, append to queue
     if settings.bot_mode in {"both", "discover"}:
         fetched_users = fetch_users(settings)
-        logger.info("Fetched %s users (source=%s)", len(fetched_users), settings.user_source)
+        logger.info(
+            "Search found %s users (source=%s)",
+            len(fetched_users),
+            settings.user_source,
+        )
         added = append_users_to_file(settings.usernames_file, fetched_users)
         if added:
-            logger.info("Appended %s new usernames to queue", added)
+            logger.info("Appended %s new usernames → %s", added, settings.usernames_file)
     else:
-        logger.info("BOT_MODE=follow — skipping discovery")
+        logger.info("BOT_MODE=follow — skipping search")
 
     if settings.bot_mode == "discover":
         logger.info("BOT_MODE=discover — skipping follow")
         return
 
+    # 2) Follow from queue
     users = read_users_from_file(settings.usernames_file)
     state = load_state(settings.state_file)
     last_user = state.get("last_followed_user")

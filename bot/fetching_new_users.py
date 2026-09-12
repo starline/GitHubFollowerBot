@@ -1,4 +1,4 @@
-"""Fetch batches of GitHub users (random stream or Cursor discovery)."""
+"""Fetch candidates for the bot cycle (criteria search or random stream)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import logging
 import requests
 
 from bot.config import Settings
-from bot.discovery import discover_cursor_users
 from bot.filters import filter_users, github_headers
+from bot.search import search_users_by_criteria
 from bot.state_manager import load_state, save_state
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,12 @@ def _fetch_random_users(settings: Settings, count: int) -> list[str]:
 
 
 def fetch_users(settings: Settings, count: int | None = None) -> list[str]:
+    """Used every bot cycle when BOT_MODE is both/discover."""
     limit = count if count is not None else settings.fetch_count
 
     if settings.user_source == "cursor":
-        logger.info("Fetching via Cursor discovery (limit=%s)", limit)
-        return discover_cursor_users(settings, limit)
+        logger.info("Searching users by Cursor criteria (limit=%s)", limit)
+        return search_users_by_criteria(settings, limit)
 
-    logger.info("Fetching via random /users stream (limit=%s)", limit)
+    logger.info("Fetching random /users stream (limit=%s)", limit)
     return _fetch_random_users(settings, limit)
