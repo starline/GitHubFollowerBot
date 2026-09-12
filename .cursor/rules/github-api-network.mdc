@@ -1,0 +1,52 @@
+---
+description: Request full_network before any GitHub API / bot network calls
+alwaysApply: true
+---
+
+# GitHub API needs full_network
+
+Cursor's default Shell sandbox **blocks** `https://api.github.com` (HTTP 403 / connection failure). This bot is entirely API-driven — never run discovery, follow, or raw `curl`/`requests` against GitHub without elevated network.
+
+## Required
+
+When the Shell tool talks to GitHub (directly or via the bot), pass:
+
+```text
+required_permissions: ["full_network"]
+```
+
+Use `["all"]` only if sandbox FS/syscalls also block the command (rare here).
+
+## Apply on first try (do not stumble)
+
+Request `full_network` **up front** for:
+
+- `./run.sh`, `python -m bot`, any discovery/follow run
+- `curl` / `gh` / `pip` hitting the public internet or GitHub
+- Scripts that call `api.github.com` (search, filters, follow)
+
+Do **not**:
+
+1. Run the bot or API call in the default sandbox
+2. Diagnose a 403 / timeout as an app bug
+3. Narrate “сеть заблокирована — перезапускаю…” after a failed attempt
+
+## Symptom → fix
+
+| Symptom | Cause | Action |
+|---------|--------|--------|
+| `403 Forbidden` from `api.github.com` in Shell | Sandbox allowlist | Re-run with `full_network` |
+| Tool note: “Network access: Limited” | Same | Same |
+| Auth `401` / rate-limit `403` with `X-RateLimit-*` | Real API response | Fix token / wait — not a sandbox issue |
+
+## Examples
+
+```bash
+# ✅ GOOD — Shell tool with required_permissions: ["full_network"]
+cd /home/starl/GitHubFollowerBot && ./run.sh
+curl -sI https://api.github.com
+
+# ❌ BAD — default sandbox; api.github.com returns 403
+curl -sI https://api.github.com
+python -m bot
+```

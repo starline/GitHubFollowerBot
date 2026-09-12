@@ -1,35 +1,34 @@
 ---
-description: Run all shell/git/gh commands via WSL, not Windows PowerShell
+description: Shell is already WSL Linux — run bash directly; never prefix with wsl
 alwaysApply: true
 ---
 
-# WSL shell (not PowerShell)
+# Shell environment (WSL Linux)
 
-This repo lives under WSL Debian: `/home/starl/GitHubFollowerBot`.
-Cursor's default Shell may be Windows PowerShell — **do not** run project tooling there.
+This repo lives at `/home/starl/GitHubFollowerBot` on **WSL Debian**.
+Cursor's agent Shell here is already Linux (`uname` → Linux …-microsoft-standard-WSL2).
+The binary `wsl` is **not** installed inside this environment.
 
 ## Required
 
-- Prefix every shell command with WSL:
-  `wsl -e bash -lc '...'`
-- Put the real work inside the quoted bash string. Use absolute Linux paths.
-- For `gh`, `git`, `python`, `pip`, `npm`, and similar: only via WSL.
-- Working directory inside WSL: `cd /home/starl/GitHubFollowerBot` (or set it in the bash `-lc` string).
+- Run commands **directly** in bash (no `wsl -e …` wrapper).
+- Use absolute Linux paths (`/home/starl/GitHubFollowerBot/...`).
+- For `gh`: ensure `PATH` includes `~/.local/bin` in non-interactive shells if needed.
+- Working directory: `cd /home/starl/GitHubFollowerBot`.
 
 ## Examples
 
 ```bash
-# ✅ GOOD
-wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && gh --version'
-wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && git status'
-wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && python -m bot'
+# ✅ GOOD — already inside WSL
+cd /home/starl/GitHubFollowerBot && gh --version
+cd /home/starl/GitHubFollowerBot && git status
+cd /home/starl/GitHubFollowerBot && python -m bot
 
-# ❌ BAD — gh/git often missing or wrong env in PowerShell
-gh pr create ...
-git status
+# ❌ BAD — `wsl` is missing here → "command not found"
+wsl -e bash -lc 'cd /home/starl/GitHubFollowerBot && git status'
 ```
 
 ## Notes
 
-- `gh` is installed in WSL at `~/.local/bin/gh` (ensure PATH in non-interactive bash if needed: `export PATH="$HOME/.local/bin:$PATH"`).
+- Only wrap with `wsl -e bash -lc '...'` if the Shell is clearly Windows PowerShell (`$env:OS` / `Get-Command` style). That is uncommon for this workspace.
 - Do not install or rely on Windows `gh` for this project unless the user asks.
