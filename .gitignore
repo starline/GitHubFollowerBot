@@ -7,6 +7,4 @@ data/
 .idea/
 .vscode/
 venv/
-check_api_call.ipynb
-old/scraper_usernames/.env
-old/fething_new_users.ipynb
+*.ipynb

@@ -14,9 +14,6 @@ from bot.state_manager import load_state, save_state
 
 logger = logging.getLogger(__name__)
 
-# Search API is stricter (~30 req/min authenticated).
-_SEARCH_ACCEPT = "application/vnd.github+json"
-
 DEFAULT_USER_QUERIES = (
     "cursor in:bio",
     '"cursor ide" in:bio',
@@ -42,7 +39,7 @@ DEFAULT_CODE_QUERIES = (
 
 DEFAULT_CHANNELS = ("users", "repos", "stargazers", "contributors", "code")
 
-DEFAULT_DISCOVERY_STATE: dict[str, Any] = {
+_DEFAULT_DISC: dict[str, Any] = {
     "channel_idx": 0,
     "user_query_idx": 0,
     "user_page": 1,
@@ -50,42 +47,43 @@ DEFAULT_DISCOVERY_STATE: dict[str, Any] = {
     "repo_page": 1,
     "code_query_idx": 0,
     "code_page": 1,
-    "repo_queue": [],  # [{full_name, stargazers_page, contributors_page, stars_done, contrib_done}]
+    "repo_queue": [],
     "seen_repos": [],
 }
 
 
-def _discovery_state() -> dict[str, Any]:
-    state = load_state()
+def _discovery_state(settings: Settings) -> dict[str, Any]:
+    state = load_state(settings.state_file)
     disc = state.get("discovery")
     if not isinstance(disc, dict):
-        disc = DEFAULT_DISCOVERY_STATE.copy()
+        disc = dict(_DEFAULT_DISC)
         state["discovery"] = disc
-        save_state(state)
-        return disc
-
-    merged = DEFAULT_DISCOVERY_STATE.copy()
-    merged.update(disc)
-    if not isinstance(merged.get("repo_queue"), list):
-        merged["repo_queue"] = []
-    if not isinstance(merged.get("seen_repos"), list):
-        merged["seen_repos"] = []
-    state["discovery"] = merged
-    return merged
+        save_state(state, settings.state_file)
+    return disc
 
 
-def _save_discovery(disc: dict[str, Any]) -> None:
-    state = load_state()
-    # Cap seen_repos growth
+def _prune_repo_queue(disc: dict[str, Any]) -> None:
+    queue = disc.get("repo_queue") or []
+    disc["repo_queue"] = [
+        entry
+        for entry in queue
+        if not (entry.get("stars_done") and entry.get("contrib_done"))
+    ]
+
+
+def _save_discovery(settings: Settings, disc: dict[str, Any]) -> None:
     seen = disc.get("seen_repos") or []
     if len(seen) > 3000:
         disc["seen_repos"] = seen[-2000:]
-    # Cap queue
+
+    _prune_repo_queue(disc)
     queue = disc.get("repo_queue") or []
     if len(queue) > 500:
         disc["repo_queue"] = queue[:500]
+
+    state = load_state(settings.state_file)
     state["discovery"] = disc
-    save_state(state)
+    save_state(state, settings.state_file)
 
 
 def _get_json(
@@ -105,11 +103,7 @@ def _get_json(
         logger.warning("GitHub 422 for %s params=%s body=%s", url, params, response.text[:200])
         return None
     if response.status_code == 403:
-        logger.warning(
-            "GitHub 403 (rate/abuse?) for %s: %s",
-            url,
-            response.text[:200],
-        )
+        logger.warning("GitHub 403 (rate/abuse?) for %s: %s", url, response.text[:200])
         return None
     response.raise_for_status()
     return response.json()
@@ -123,11 +117,10 @@ def _search(
     page: int,
     per_page: int,
 ) -> list[dict[str, Any]]:
-    url = f"https://api.github.com/search/{endpoint}"
     data = _get_json(
         session,
         settings,
-        url,
+        f"https://api.github.com/search/{endpoint}",
         params={"q": query, "page": page, "per_page": min(per_page, 100)},
     )
     if not data:
@@ -142,6 +135,24 @@ def _search(
         data.get("total_count"),
     )
     return items
+
+
+def _advance_query_cursor(
+    disc: dict[str, Any],
+    *,
+    page_key: str,
+    idx_key: str,
+    page: int,
+    q_idx: int,
+    n_queries: int,
+    had_items: bool,
+    max_page: int = 10,
+) -> None:
+    if had_items and page < max_page:
+        disc[page_key] = page + 1
+        return
+    disc[page_key] = 1
+    disc[idx_key] = (q_idx + 1) % n_queries
 
 
 def _enqueue_repo(disc: dict[str, Any], full_name: str) -> None:
@@ -163,21 +174,42 @@ def _enqueue_repo(disc: dict[str, Any], full_name: str) -> None:
     logger.info("Queued repo %s for mining", full_name)
 
 
-def _users_from_search_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _user_stub(item: dict[str, Any]) -> dict[str, Any] | None:
+    login = (item.get("login") or "").strip()
+    if not login:
+        return None
+    return {
+        "login": login,
+        "id": item.get("id"),
+        "type": item.get("type") or "User",
+        "site_admin": item.get("site_admin", False),
+    }
+
+
+def _users_from_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for item in items:
-        login = (item.get("login") or "").strip()
-        if not login:
-            continue
-        out.append(
-            {
-                "login": login,
-                "id": item.get("id"),
-                "type": item.get("type") or "User",
-                "site_admin": item.get("site_admin", False),
-            }
-        )
+        stub = _user_stub(item)
+        if stub:
+            out.append(stub)
     return out
+
+
+def _owners_from_repos(
+    disc: dict[str, Any],
+    items: list[dict[str, Any]],
+    *,
+    from_code_search: bool = False,
+) -> list[dict[str, Any]]:
+    owners: list[dict[str, Any]] = []
+    for item in items:
+        repo = (item.get("repository") or {}) if from_code_search else item
+        full_name = repo.get("full_name") or ""
+        _enqueue_repo(disc, full_name)
+        stub = _user_stub(repo.get("owner") or {})
+        if stub:
+            owners.append(stub)
+    return owners
 
 
 def _channel_users(
@@ -192,21 +224,17 @@ def _channel_users(
 
     q_idx = int(disc.get("user_query_idx") or 0) % len(queries)
     page = int(disc.get("user_page") or 1)
-    query = queries[q_idx]
-    items = _search(session, settings, "users", query, page, need)
-    users = _users_from_search_items(items)
-
-    if items:
-        disc["user_page"] = page + 1
-        # GitHub search hard-caps at 1000 results (page*per_page)
-        if page >= 10:
-            disc["user_page"] = 1
-            disc["user_query_idx"] = (q_idx + 1) % len(queries)
-    else:
-        disc["user_page"] = 1
-        disc["user_query_idx"] = (q_idx + 1) % len(queries)
-
-    return users[:need]
+    items = _search(session, settings, "users", queries[q_idx], page, need)
+    _advance_query_cursor(
+        disc,
+        page_key="user_page",
+        idx_key="user_query_idx",
+        page=page,
+        q_idx=q_idx,
+        n_queries=len(queries),
+        had_items=bool(items),
+    )
+    return _users_from_items(items)[:need]
 
 
 def _channel_repos(
@@ -215,41 +243,23 @@ def _channel_repos(
     disc: dict[str, Any],
     need: int,
 ) -> list[dict[str, Any]]:
-    """Find Cursor-related repos; enqueue for stargazer/contributor mining; return owners."""
     queries = settings.cursor_repo_queries or DEFAULT_REPO_QUERIES
     if not queries:
         return []
 
     q_idx = int(disc.get("repo_query_idx") or 0) % len(queries)
     page = int(disc.get("repo_page") or 1)
-    query = queries[q_idx]
-    items = _search(session, settings, "repositories", query, page, min(need, 30))
-
-    owners: list[dict[str, Any]] = []
-    for repo in items:
-        full_name = repo.get("full_name") or ""
-        _enqueue_repo(disc, full_name)
-        owner = repo.get("owner") or {}
-        login = (owner.get("login") or "").strip()
-        if login:
-            owners.append(
-                {
-                    "login": login,
-                    "id": owner.get("id"),
-                    "type": owner.get("type") or "User",
-                    "site_admin": owner.get("site_admin", False),
-                }
-            )
-
-    if items:
-        disc["repo_page"] = page + 1
-        if page >= 10:
-            disc["repo_page"] = 1
-            disc["repo_query_idx"] = (q_idx + 1) % len(queries)
-    else:
-        disc["repo_page"] = 1
-        disc["repo_query_idx"] = (q_idx + 1) % len(queries)
-
+    items = _search(session, settings, "repositories", queries[q_idx], page, min(need, 30))
+    owners = _owners_from_repos(disc, items)
+    _advance_query_cursor(
+        disc,
+        page_key="repo_page",
+        idx_key="repo_query_idx",
+        page=page,
+        q_idx=q_idx,
+        n_queries=len(queries),
+        had_items=bool(items),
+    )
     return owners[:need]
 
 
@@ -259,53 +269,68 @@ def _channel_code(
     disc: dict[str, Any],
     need: int,
 ) -> list[dict[str, Any]]:
-    """Users who commit Cursor config files (.cursorrules, .cursor/rules)."""
     queries = settings.cursor_code_queries or DEFAULT_CODE_QUERIES
     if not queries:
         return []
 
     q_idx = int(disc.get("code_query_idx") or 0) % len(queries)
     page = int(disc.get("code_page") or 1)
-    query = queries[q_idx]
-    items = _search(session, settings, "code", query, page, min(need, 30))
-
-    owners: list[dict[str, Any]] = []
-    for item in items:
-        repo = item.get("repository") or {}
-        full_name = repo.get("full_name") or ""
-        _enqueue_repo(disc, full_name)
-        owner = repo.get("owner") or {}
-        login = (owner.get("login") or "").strip()
-        if login:
-            owners.append(
-                {
-                    "login": login,
-                    "id": owner.get("id"),
-                    "type": owner.get("type") or "User",
-                    "site_admin": owner.get("site_admin", False),
-                }
-            )
-
-    if items:
-        disc["code_page"] = page + 1
-        if page >= 10:
-            disc["code_page"] = 1
-            disc["code_query_idx"] = (q_idx + 1) % len(queries)
-    else:
-        disc["code_page"] = 1
-        disc["code_query_idx"] = (q_idx + 1) % len(queries)
-
+    items = _search(session, settings, "code", queries[q_idx], page, min(need, 30))
+    owners = _owners_from_repos(disc, items, from_code_search=True)
+    _advance_query_cursor(
+        disc,
+        page_key="code_page",
+        idx_key="code_query_idx",
+        page=page,
+        q_idx=q_idx,
+        n_queries=len(queries),
+        had_items=bool(items),
+    )
     return owners[:need]
 
 
 def _pick_repo(disc: dict[str, Any], *, want_stars: bool) -> dict[str, Any] | None:
-    queue: list[dict[str, Any]] = disc.get("repo_queue") or []
-    for entry in queue:
+    for entry in disc.get("repo_queue") or []:
         if want_stars and not entry.get("stars_done"):
             return entry
         if not want_stars and not entry.get("contrib_done"):
             return entry
     return None
+
+
+def _paginate_repo_users(
+    session: requests.Session,
+    settings: Settings,
+    entry: dict[str, Any],
+    *,
+    kind: str,
+    need: int,
+    max_page: int,
+) -> list[dict[str, Any]]:
+    full_name = entry["full_name"]
+    page_key = "stargazers_page" if kind == "stargazers" else "contributors_page"
+    done_key = "stars_done" if kind == "stargazers" else "contrib_done"
+    page = int(entry.get(page_key) or 1)
+    owner, repo = full_name.split("/", 1)
+    url = (
+        f"https://api.github.com/repos/{quote_plus(owner)}/{quote_plus(repo)}/{kind}"
+    )
+    params: dict[str, Any] = {"page": page, "per_page": min(need, 100)}
+    if kind == "contributors":
+        params["anon"] = "false"
+
+    items = _get_json(session, settings, url, params=params)
+    if items is None or not isinstance(items, list):
+        entry[done_key] = True
+        return []
+
+    logger.info("%s %s page=%s → %s", kind.capitalize(), full_name, page, len(items))
+    if not items or page >= max_page:
+        entry[done_key] = True
+    else:
+        entry[page_key] = page + 1
+
+    return _users_from_items(items)[:need]
 
 
 def _channel_stargazers(
@@ -318,33 +343,9 @@ def _channel_stargazers(
     if entry is None:
         logger.info("No repos queued for stargazers yet")
         return []
-
-    full_name = entry["full_name"]
-    page = int(entry.get("stargazers_page") or 1)
-    owner, repo = full_name.split("/", 1)
-    url = f"https://api.github.com/repos/{quote_plus(owner)}/{quote_plus(repo)}/stargazers"
-    items = _get_json(
-        session,
-        settings,
-        url,
-        params={"page": page, "per_page": min(need, 100)},
+    return _paginate_repo_users(
+        session, settings, entry, kind="stargazers", need=need, max_page=20
     )
-    if items is None:
-        entry["stars_done"] = True
-        return []
-    if not isinstance(items, list):
-        entry["stars_done"] = True
-        return []
-
-    logger.info("Stargazers %s page=%s → %s", full_name, page, len(items))
-    if not items:
-        entry["stars_done"] = True
-    else:
-        entry["stargazers_page"] = page + 1
-        if page >= 20:
-            entry["stars_done"] = True
-
-    return _users_from_search_items(items)[:need]
 
 
 def _channel_contributors(
@@ -357,33 +358,9 @@ def _channel_contributors(
     if entry is None:
         logger.info("No repos queued for contributors yet")
         return []
-
-    full_name = entry["full_name"]
-    page = int(entry.get("contributors_page") or 1)
-    owner, repo = full_name.split("/", 1)
-    url = f"https://api.github.com/repos/{quote_plus(owner)}/{quote_plus(repo)}/contributors"
-    items = _get_json(
-        session,
-        settings,
-        url,
-        params={"page": page, "per_page": min(need, 100), "anon": "false"},
+    return _paginate_repo_users(
+        session, settings, entry, kind="contributors", need=need, max_page=10
     )
-    if items is None:
-        entry["contrib_done"] = True
-        return []
-    if not isinstance(items, list):
-        entry["contrib_done"] = True
-        return []
-
-    logger.info("Contributors %s page=%s → %s", full_name, page, len(items))
-    if not items:
-        entry["contrib_done"] = True
-    else:
-        entry["contributors_page"] = page + 1
-        if page >= 10:
-            entry["contrib_done"] = True
-
-    return _users_from_search_items(items)[:need]
 
 
 _CHANNEL_HANDLERS = {
@@ -406,18 +383,12 @@ def discover_cursor_users(settings: Settings, limit: int) -> list[str]:
       contributors — people who commit to those repos
       code         — owners of repos containing .cursorrules / .cursor/rules
     """
-    channels = settings.discovery_channels or DEFAULT_CHANNELS
-    if not channels:
-        channels = DEFAULT_CHANNELS
-
-    disc = _discovery_state()
+    channels = tuple(settings.discovery_channels) or DEFAULT_CHANNELS
+    disc = _discovery_state(settings)
     collected: list[str] = []
     seen_logins: set[str] = set()
 
     with requests.Session() as session:
-        # Prefer search media type for search endpoints (headers already fine).
-        session.headers.update({"Accept": _SEARCH_ACCEPT})
-
         started_idx = int(disc.get("channel_idx") or 0) % len(channels)
         empty_streak = 0
 
@@ -434,10 +405,8 @@ def discover_cursor_users(settings: Settings, limit: int) -> list[str]:
                     raw_users = handler(session, settings, disc, need)
                 except requests.exceptions.RequestException as exc:
                     logger.error("Discovery channel %s failed: %s", channel, exc)
-                    raw_users = []
 
-            # Drop duplicates within this batch / cycle
-            unique = []
+            unique: list[dict[str, Any]] = []
             for user in raw_users:
                 login = (user.get("login") or "").strip()
                 if not login or login.lower() in seen_logins:
@@ -449,18 +418,12 @@ def discover_cursor_users(settings: Settings, limit: int) -> list[str]:
             collected.extend(accepted)
 
             disc["channel_idx"] = (idx + 1) % len(channels)
-            if not accepted:
-                empty_streak += 1
-            else:
-                empty_streak = 0
+            empty_streak = empty_streak + 1 if not accepted else 0
+            _save_discovery(settings, disc)
 
-            # Persist progress between channel hops
-            _save_discovery(disc)
-
-            # Avoid infinite spin if we wrapped without filling quota
             if disc["channel_idx"] == started_idx and empty_streak >= len(channels):
                 break
 
-    _save_discovery(disc)
+    _save_discovery(settings, disc)
     logger.info("Cursor discovery collected %s users this cycle", len(collected))
     return collected[:limit]

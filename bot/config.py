@@ -150,14 +150,12 @@ class Settings:
     loop_sleep_seconds: int
     max_calls_per_hour: int
     user_agent: str
-    # Source / mode
     user_source: str
     bot_mode: str
     discovery_channels: tuple[str, ...]
     cursor_user_queries: tuple[str, ...]
     cursor_repo_queries: tuple[str, ...]
     cursor_code_queries: tuple[str, ...]
-    # Filters
     users_only: bool
     skip_site_admin: bool
     skip_bot_logins: bool
@@ -175,15 +173,19 @@ class Settings:
     location_contains: tuple[str, ...]
     location_exclude: tuple[str, ...]
     login_exclude: tuple[str, ...]
-    # Dead / inactive
     skip_dead: bool
     max_inactive_days: int
     require_public_events: bool
     skip_empty_profiles: bool
 
 
-def load_settings() -> Settings:
-    interactive_setup()
+def load_settings(*, interactive: bool = False) -> Settings:
+    """Load settings from .env. Pass interactive=True once at process start."""
+    if interactive:
+        interactive_setup()
+    else:
+        ensure_env_file()
+
     load_dotenv(_ENV_PATH, override=True)
 
     token = (os.getenv("GITHUB_TOKEN") or "").strip()

@@ -12,6 +12,8 @@ from bot.config import Settings
 
 logger = logging.getLogger(__name__)
 
+_Http = requests.Session | Any
+
 
 def github_headers(settings: Settings) -> dict[str, str]:
     return {
@@ -20,6 +22,10 @@ def github_headers(settings: Settings) -> dict[str, str]:
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": settings.user_agent,
     }
+
+
+def _http(session: requests.Session | None) -> _Http:
+    return session if session is not None else requests
 
 
 def _parse_gh_time(value: str | None) -> datetime | None:
@@ -82,6 +88,14 @@ def _check_list_fields(user: dict[str, Any], settings: Settings) -> str | None:
     return None
 
 
+def _in_range(value: int, minimum: int | None, maximum: int | None, label: str) -> str | None:
+    if minimum is not None and value < minimum:
+        return f"{label}={value} < {minimum}"
+    if maximum is not None and value > maximum:
+        return f"{label}={value} > {maximum}"
+    return None
+
+
 def _check_profile(profile: dict[str, Any], settings: Settings) -> str | None:
     """Return skip reason or None if OK (full /users/{login} payload)."""
     reason = _check_list_fields(profile, settings)
@@ -92,20 +106,14 @@ def _check_profile(profile: dict[str, Any], settings: Settings) -> str | None:
     following = int(profile.get("following") or 0)
     repos = int(profile.get("public_repos") or 0)
 
-    if settings.min_followers is not None and followers < settings.min_followers:
-        return f"followers={followers} < {settings.min_followers}"
-    if settings.max_followers is not None and followers > settings.max_followers:
-        return f"followers={followers} > {settings.max_followers}"
-
-    if settings.min_following is not None and following < settings.min_following:
-        return f"following={following} < {settings.min_following}"
-    if settings.max_following is not None and following > settings.max_following:
-        return f"following={following} > {settings.max_following}"
-
-    if settings.min_repos is not None and repos < settings.min_repos:
-        return f"repos={repos} < {settings.min_repos}"
-    if settings.max_repos is not None and repos > settings.max_repos:
-        return f"repos={repos} > {settings.max_repos}"
+    for label, value, lo, hi in (
+        ("followers", followers, settings.min_followers, settings.max_followers),
+        ("following", following, settings.min_following, settings.max_following),
+        ("repos", repos, settings.min_repos, settings.max_repos),
+    ):
+        reason = _in_range(value, lo, hi, label)
+        if reason:
+            return reason
 
     bio = (profile.get("bio") or "").strip()
     if settings.require_bio and not bio:
@@ -138,10 +146,16 @@ def _check_profile(profile: dict[str, Any], settings: Settings) -> str | None:
     return None
 
 
-def fetch_profile(login: str, settings: Settings, session: requests.Session | None = None) -> dict[str, Any] | None:
-    http = session or requests
-    url = f"https://api.github.com/users/{login}"
-    response = http.get(url, headers=github_headers(settings), timeout=30)
+def fetch_profile(
+    login: str,
+    settings: Settings,
+    session: requests.Session | None = None,
+) -> dict[str, Any] | None:
+    response = _http(session).get(
+        f"https://api.github.com/users/{login}",
+        headers=github_headers(settings),
+        timeout=30,
+    )
     if response.status_code == 404:
         return None
     response.raise_for_status()
@@ -153,10 +167,8 @@ def fetch_latest_public_event(
     settings: Settings,
     session: requests.Session | None = None,
 ) -> dict[str, Any] | None:
-    http = session or requests
-    url = f"https://api.github.com/users/{login}/events/public"
-    response = http.get(
-        url,
+    response = _http(session).get(
+        f"https://api.github.com/users/{login}/events/public",
         headers=github_headers(settings),
         params={"per_page": 1},
         timeout=30,
@@ -193,10 +205,16 @@ def _check_recent_activity(
     return None
 
 
-def is_already_following(login: str, settings: Settings, session: requests.Session | None = None) -> bool:
-    http = session or requests
-    url = f"https://api.github.com/user/following/{login}"
-    response = http.get(url, headers=github_headers(settings), timeout=30)
+def is_already_following(
+    login: str,
+    settings: Settings,
+    session: requests.Session | None = None,
+) -> bool:
+    response = _http(session).get(
+        f"https://api.github.com/user/following/{login}",
+        headers=github_headers(settings),
+        timeout=30,
+    )
     if response.status_code == 204:
         return True
     if response.status_code == 404:
@@ -228,9 +246,7 @@ def evaluate_user(
     if not _needs_profile(settings):
         return True, "ok"
 
-    full = profile
-    if full is None:
-        full = fetch_profile(login, settings, session)
+    full = profile if profile is not None else fetch_profile(login, settings, session)
     if full is None:
         return False, "not found / dead"
 

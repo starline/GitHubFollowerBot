@@ -11,7 +11,7 @@ from bot.follower import run_cycle
 
 
 def main() -> None:
-    settings = load_settings()
+    settings = load_settings(interactive=True)
     settings.log_file.parent.mkdir(parents=True, exist_ok=True)
 
     logging.basicConfig(
@@ -28,7 +28,7 @@ def main() -> None:
         while True:
             settings = load_settings()
             try:
-                run_cycle()
+                run_cycle(settings)
             except Exception as exc:
                 logger.exception("Cycle failed: %s", exc)
             logger.info("Sleeping %ss before next cycle", settings.loop_sleep_seconds)

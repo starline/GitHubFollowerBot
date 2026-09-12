@@ -71,7 +71,7 @@ USER_SOURCE=cursor
 | `LOCATION_CONTAINS` / `LOCATION_EXCLUDE` | off | comma substrings (case-insensitive) |
 | `LOGIN_EXCLUDE` | off | exact logins to skip |
 | `FILTER_SKIP_DEAD` | `1` | drop inactive / empty accounts |
-| `MAX_INACTIVE_DAYS` | `365` | max age of profile update / last public event |
+| `MAX_INACTIVE_DAYS` | `30` | max age of profile update / last public event |
 | `FILTER_REQUIRE_PUBLIC_EVENTS` | `1` | require a public event in that window |
 | `FILTER_SKIP_EMPTY_PROFILES` | `1` | skip 0 repos + 0 followers |
 

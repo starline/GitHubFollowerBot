@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
-from bot.config import load_settings
-
-DEFAULT_STATE = {
+DEFAULT_STATE: dict[str, Any] = {
     "last_followed_user": None,
     "how_many_bot_followed_so_far_counter": 0,
     "last_fetched_user": 0,
@@ -25,26 +25,40 @@ DEFAULT_STATE = {
 }
 
 
-def _state_path() -> Path:
-    return load_settings().state_file
-
-
-def load_state() -> dict:
-    path = _state_path()
-    if not path.exists():
-        save_state(DEFAULT_STATE.copy())
-        return DEFAULT_STATE.copy()
-
-    with path.open("r", encoding="utf-8") as file:
-        state = json.load(file)
-
-    merged = DEFAULT_STATE.copy()
-    merged.update(state)
+def _merge_state(raw: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(DEFAULT_STATE)
+    for key, value in raw.items():
+        if key == "discovery" and isinstance(value, dict):
+            disc = deepcopy(DEFAULT_STATE["discovery"])
+            disc.update(value)
+            if not isinstance(disc.get("repo_queue"), list):
+                disc["repo_queue"] = []
+            if not isinstance(disc.get("seen_repos"), list):
+                disc["seen_repos"] = []
+            merged["discovery"] = disc
+        else:
+            merged[key] = value
     return merged
 
 
-def save_state(state: dict) -> None:
-    path = _state_path()
+def load_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        state = deepcopy(DEFAULT_STATE)
+        save_state(state, path)
+        return state
+
+    with path.open("r", encoding="utf-8") as file:
+        raw = json.load(file)
+
+    if not isinstance(raw, dict):
+        state = deepcopy(DEFAULT_STATE)
+        save_state(state, path)
+        return state
+
+    return _merge_state(raw)
+
+
+def save_state(state: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as file:
         json.dump(state, file, indent=4)

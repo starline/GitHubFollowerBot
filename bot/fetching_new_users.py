@@ -6,7 +6,7 @@ import logging
 
 import requests
 
-from bot.config import load_settings
+from bot.config import Settings
 from bot.discovery import discover_cursor_users
 from bot.filters import filter_users, github_headers
 from bot.state_manager import load_state, save_state
@@ -14,45 +14,34 @@ from bot.state_manager import load_state, save_state
 logger = logging.getLogger(__name__)
 
 
-def _fetch_random_users(count: int, token: str) -> list[str]:
-    settings = load_settings()
-    state = load_state()
-    last_fetched_user = state.get("last_fetched_user") or 0
+def _fetch_random_users(settings: Settings, count: int) -> list[str]:
+    state = load_state(settings.state_file)
+    last_fetched_user = int(state.get("last_fetched_user") or 0)
 
-    url = "https://api.github.com/users"
-    params = {
-        "per_page": count,
-        "since": last_fetched_user,
-    }
-    headers = github_headers(settings)
-    if token != settings.github_token:
-        headers = {**headers, "Authorization": f"Bearer {token}"}
-
-    response = requests.get(url, params=params, headers=headers, timeout=30)
+    response = requests.get(
+        "https://api.github.com/users",
+        params={"per_page": count, "since": last_fetched_user},
+        headers=github_headers(settings),
+        timeout=30,
+    )
     response.raise_for_status()
-    fetched_users_api = response.json()
-
-    if not fetched_users_api:
+    fetched = response.json()
+    if not fetched:
         return []
 
-    state["last_fetched_user"] = fetched_users_api[-1]["id"]
-    save_state(state)
+    state["last_fetched_user"] = fetched[-1]["id"]
+    save_state(state, settings.state_file)
 
     with requests.Session() as session:
-        return filter_users(fetched_users_api, settings, session=session)
+        return filter_users(fetched, settings, session=session)
 
 
-def fetching_users_from_github(
-    users_to_fetch: int | None = None,
-    token: str | None = None,
-) -> list[str]:
-    settings = load_settings()
-    count = users_to_fetch or settings.fetch_count
-    auth_token = token or settings.github_token
+def fetch_users(settings: Settings, count: int | None = None) -> list[str]:
+    limit = count if count is not None else settings.fetch_count
 
     if settings.user_source == "cursor":
-        logger.info("Fetching via Cursor discovery (limit=%s)", count)
-        return discover_cursor_users(settings, count)
+        logger.info("Fetching via Cursor discovery (limit=%s)", limit)
+        return discover_cursor_users(settings, limit)
 
-    logger.info("Fetching via random /users stream (limit=%s)", count)
-    return _fetch_random_users(count, auth_token)
+    logger.info("Fetching via random /users stream (limit=%s)", limit)
+    return _fetch_random_users(settings, limit)
